@@ -18,6 +18,7 @@
 Name "DBML Studio"
 OutFile "${OUTPUT_FILE}"
 InstallDir "$LOCALAPPDATA\Programs\DBML Studio"
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboticsY.DBMLStudio" "InstallLocation"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 VIProductVersion "${VERSION}.0"

@@ -4,6 +4,7 @@ mod document;
 mod format;
 mod inspector;
 mod model;
+mod update;
 
 use canvas::{Canvas, Pick};
 use document::Document;
@@ -457,6 +458,7 @@ struct Studio {
     active: usize,
     next_id: u64,
     closing: bool,
+    updates: update::Updates,
 }
 impl Studio {
     fn new() -> Self {
@@ -465,6 +467,7 @@ impl Studio {
             active: 0,
             next_id: 2,
             closing: false,
+            updates: update::Updates::default(),
         }
     }
     fn add(&mut self) -> usize {
@@ -809,6 +812,13 @@ impl eframe::App for Studio {
                         self.tabs[self.active].history(true)
                     }
                     ui.toggle_value(&mut self.tabs[self.active].source_visible, "DBML テキスト");
+                    let can_close = self.tabs.iter().all(|tab| {
+                        !tab.dirty() && tab.dialog.is_none() && !tab.canvas.is_editing()
+                    });
+                    if self.updates.toolbar(ui, can_close) {
+                        self.closing = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 });
                 ui.add_space(4.);
             });
