@@ -20,12 +20,7 @@ fn main() -> eframe::Result {
     let _instance = match instance::acquire(app_data_directory().as_deref()) {
         Ok(Some(lock)) => lock,
         Ok(None) => {
-            rfd::MessageDialog::new()
-                .set_title("DBML Studio")
-                .set_description(
-                    "DBML Studio はすでに起動しています。既存のウインドウをお使いください。",
-                )
-                .show();
+            eprintln!("DBML Studio はすでに起動しています。");
             return Ok(());
         }
         Err(error) => {
