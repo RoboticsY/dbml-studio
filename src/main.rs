@@ -25,7 +25,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let ctx = &cc.egui_ctx;
-            ctx.set_visuals(egui::Visuals::light());
+            ctx.set_theme(egui::Theme::Light);
+            ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
             let mut fonts = egui::FontDefinitions::default();
             let dir =
                 PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:/Windows".into()))
@@ -46,11 +47,38 @@ fn main() -> eframe::Result {
                 }
                 ctx.set_fonts(fonts);
             }
-            ctx.style_mut(|s| {
-                s.spacing.button_padding = egui::vec2(9., 5.);
-                s.visuals.panel_fill = Color32::from_rgb(252, 252, 249);
-                s.visuals.selection.bg_fill = Color32::from_rgb(176, 220, 215);
-                s.visuals.hyperlink_color = Color32::from_rgb(15, 100, 99);
+            ctx.style_mut_of(egui::Theme::Light, |s| {
+                let ink = Color32::from_rgb(32, 33, 38);
+                let line = Color32::from_rgb(215, 216, 222);
+                s.spacing.item_spacing = egui::vec2(8., 6.);
+                s.spacing.button_padding = egui::vec2(10., 5.);
+                s.spacing.interact_size.y = 28.;
+                s.text_styles
+                    .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
+                s.text_styles
+                    .insert(egui::TextStyle::Button, egui::FontId::proportional(13.));
+                let v = &mut s.visuals;
+                v.panel_fill = Color32::from_rgb(248, 248, 250);
+                v.window_fill = Color32::from_rgb(252, 252, 254);
+                v.extreme_bg_color = Color32::WHITE;
+                v.hyperlink_color = canvas::ACCENT;
+                v.selection.bg_fill = Color32::from_rgb(216, 233, 255);
+                v.selection.stroke = egui::Stroke::new(1.0_f32, canvas::ACCENT);
+                v.widgets.noninteractive.fg_stroke.color = ink;
+                v.widgets.noninteractive.bg_stroke.color = line;
+                for (w, fill) in [
+                    (&mut v.widgets.inactive, Color32::WHITE),
+                    (&mut v.widgets.hovered, Color32::from_rgb(236, 241, 250)),
+                    (&mut v.widgets.active, Color32::from_rgb(222, 234, 251)),
+                    (&mut v.widgets.open, Color32::from_rgb(229, 235, 245)),
+                ] {
+                    w.weak_bg_fill = fill;
+                    w.bg_fill = fill;
+                    w.fg_stroke.color = ink;
+                    w.bg_stroke = egui::Stroke::new(1.0_f32, line);
+                    w.corner_radius = egui::CornerRadius::same(7);
+                    w.expansion = 0.;
+                }
             });
             let mut app = Studio::new();
             for path in std::env::args_os().skip(1) {
@@ -104,6 +132,7 @@ impl Tab {
         }
     }
     fn clear_form(&mut self) {
+        self.canvas.cancel_edit();
         self.form = Form::None;
         self.pick = None;
         self.jump = None;
@@ -334,10 +363,16 @@ impl Tab {
                 .show(ctx, |ui| self.source(ui));
         }
         egui::SidePanel::right(egui::Id::new(("inspector", self.id)))
-            .default_width(226.)
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(247, 247, 250))
+                    .inner_margin(14),
+            )
+            .default_width(248.)
             .width_range(190.0..=450.)
             .show(ctx, |ui| {
-                ui.strong("プロパティ");
+                ui.label(egui::RichText::new("プロパティ").size(18.).strong());
+                ui.add_space(5.);
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector-scroll", self.id))
@@ -363,7 +398,10 @@ impl Tab {
                     .then(|| self.canvas.positions.clone());
                 let pick = ui
                     .add_enabled_ui(valid, |ui| {
-                        self.canvas.show(ui, &self.doc.schema, self.pick)
+                        ui.push_id(self.id, |ui| {
+                            self.canvas.show(ui, &self.doc.schema, self.pick)
+                        })
+                        .inner
                     })
                     .inner;
                 if self.baseline_on_draw {
@@ -373,8 +411,10 @@ impl Tab {
                     self.changed();
                 }
                 if valid {
-                    if let Some(p) = pick {
-                        self.select(p)
+                    match pick {
+                        Some(Event::Select(p)) => self.select(p),
+                        Some(Event::Apply(a)) => self.edit(a),
+                        None => {}
                     }
                 }
             });
@@ -492,35 +532,70 @@ impl Studio {
     }
     fn tab_bar(&mut self, ctx: &egui::Context) {
         let mut close = false;
-        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
-            egui::ScrollArea::horizontal()
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for (i, tab) in self.tabs.iter().enumerate() {
-                            ui.push_id(tab.id, |ui| {
-                                let mut name = tab.title();
-                                if tab.dirty() {
-                                    name.push_str(" *");
-                                }
-                                let response = ui.selectable_label(i == self.active, name);
-                                if response.clicked() {
-                                    self.active = i;
-                                }
-                                if let Some(path) = &tab.doc.path {
-                                    response.on_hover_text(path.display().to_string());
-                                }
-                                if ui.small_button("×").on_hover_text("タブを閉じる").clicked()
-                                {
-                                    self.active = i;
-                                    close = true;
-                                }
-                                ui.separator();
-                            });
-                        }
+        egui::TopBottomPanel::top("tabs")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(236, 236, 241))
+                    .inner_margin(egui::Margin::symmetric(12, 4)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::horizontal()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (i, tab) in self.tabs.iter().enumerate() {
+                                ui.push_id(tab.id, |ui| {
+                                    let mut name = tab.title();
+                                    if tab.dirty() {
+                                        name.push_str(" *");
+                                    }
+                                    let active = i == self.active;
+                                    let fill = if active {
+                                        Color32::WHITE
+                                    } else {
+                                        Color32::TRANSPARENT
+                                    };
+                                    egui::Frame::new()
+                                        .fill(fill)
+                                        .corner_radius(8)
+                                        .inner_margin(egui::Margin::symmetric(3, 1))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 1.;
+                                                let response = ui.add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(name).color(
+                                                            if active {
+                                                                canvas::ACCENT
+                                                            } else {
+                                                                Color32::from_gray(72)
+                                                            },
+                                                        ),
+                                                    )
+                                                    .frame(false),
+                                                );
+                                                if response.clicked() {
+                                                    self.active = i;
+                                                }
+                                                if let Some(path) = &tab.doc.path {
+                                                    response
+                                                        .on_hover_text(path.display().to_string());
+                                                }
+                                                if ui
+                                                    .add(egui::Button::new("×").frame(false))
+                                                    .on_hover_text("タブを閉じる")
+                                                    .clicked()
+                                                {
+                                                    self.active = i;
+                                                    close = true;
+                                                }
+                                            })
+                                        });
+                                });
+                            }
+                        });
                     });
-                });
-        });
+            });
         if close {
             self.file(ctx, FileTask::CloseTab, false);
         }
@@ -656,7 +731,8 @@ impl eframe::App for Studio {
             if key(Modifiers::COMMAND, Key::W) {
                 self.file(ctx, FileTask::CloseTab, false);
             }
-            let document_undo = !inspector::editing_property(ctx, self.tabs[self.active].id);
+            let document_undo = !self.tabs[self.active].canvas.is_editing()
+                && !inspector::editing_property(ctx, self.tabs[self.active].id);
             if document_undo
                 && (key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z)
                     || key(Modifiers::COMMAND, Key::Y))
@@ -666,34 +742,45 @@ impl eframe::App for Studio {
                 self.tabs[self.active].history(false)
             }
         }
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-            ui.add_space(4.);
-            ui.horizontal_wrapped(|ui| {
-                ui.heading("DBML Studio");
-                ui.separator();
-                if ui.button("新規").clicked() {
-                    self.file(ctx, FileTask::New, false)
-                }
-                if ui.button("開く").clicked() {
-                    self.file(ctx, FileTask::Open, false)
-                }
-                if ui.button("保存").clicked() {
-                    self.save(false);
-                }
-                if ui.button("別名で保存").clicked() {
-                    self.save(true);
-                }
-                ui.separator();
-                if ui.button("元に戻す").clicked() {
-                    self.tabs[self.active].history(false)
-                }
-                if ui.button("やり直す").clicked() {
-                    self.tabs[self.active].history(true)
-                }
-                ui.toggle_value(&mut self.tabs[self.active].source_visible, "DBML テキスト");
+        egui::TopBottomPanel::top("toolbar")
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(247, 247, 250))
+                    .inner_margin(egui::Margin::symmetric(15, 5)),
+            )
+            .show(ctx, |ui| {
+                ui.add_space(4.);
+                ui.horizontal_wrapped(|ui| {
+                    let (icon, _) =
+                        ui.allocate_exact_size(egui::vec2(28., 28.), egui::Sense::hover());
+                    ui.painter().rect_filled(icon, 8., canvas::ACCENT);
+                    canvas::table_symbol(ui.painter(), icon.shrink(6.), Color32::WHITE);
+                    ui.label(egui::RichText::new("DBML Studio").size(19.).strong());
+                    ui.add_space(8.);
+                    ui.separator();
+                    if ui.button("新規").clicked() {
+                        self.file(ctx, FileTask::New, false)
+                    }
+                    if ui.button("開く").clicked() {
+                        self.file(ctx, FileTask::Open, false)
+                    }
+                    if ui.button("保存").clicked() {
+                        self.save(false);
+                    }
+                    if ui.button("別名で保存").clicked() {
+                        self.save(true);
+                    }
+                    ui.separator();
+                    if ui.button("元に戻す").clicked() {
+                        self.tabs[self.active].history(false)
+                    }
+                    if ui.button("やり直す").clicked() {
+                        self.tabs[self.active].history(true)
+                    }
+                    ui.toggle_value(&mut self.tabs[self.active].source_visible, "DBML テキスト");
+                });
+                ui.add_space(4.);
             });
-            ui.add_space(4.);
-        });
         self.tab_bar(ctx);
         self.tabs[self.active].draw(ctx);
         self.autosave_due(ctx);

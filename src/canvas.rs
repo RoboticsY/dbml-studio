@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::model::{Schema, Table};
+use crate::{
+    inspector::Event,
+    model::{Action, Schema, Table},
+};
 use eframe::egui::{
     self, pos2, vec2, Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2,
@@ -9,9 +12,9 @@ use eframe::egui::{
 const WIDTH: f32 = 208.0;
 const HEADER: f32 = 35.0;
 const ROW: f32 = 26.0;
-const ACCENT: Color32 = Color32::from_rgb(18, 107, 104);
-const INK: Color32 = Color32::from_rgb(33, 50, 65);
-const MUTED: Color32 = Color32::from_rgb(78, 97, 111);
+pub(crate) const ACCENT: Color32 = Color32::from_rgb(0, 96, 211);
+const INK: Color32 = Color32::from_rgb(33, 34, 40);
+const MUTED: Color32 = Color32::from_rgb(89, 92, 102);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pick {
@@ -21,11 +24,58 @@ pub enum Pick {
     AddTable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Field {
+    Table(usize),
+    Name(usize, usize),
+    Type(usize, usize),
+}
+
+impl Field {
+    fn text(self, schema: &Schema) -> &str {
+        match self {
+            Self::Table(t) => &schema.tables[t].name,
+            Self::Name(t, c) => &schema.tables[t].columns[c].name,
+            Self::Type(t, c) => &schema.tables[t].columns[c].ty,
+        }
+    }
+    fn update(self, schema: &Schema, value: String) -> Action {
+        match self {
+            Self::Table(t) => Action::RenameTable(t, value),
+            Self::Name(t, c) | Self::Type(t, c) => {
+                let mut col = schema.tables[t].columns[c].clone();
+                match self {
+                    Self::Name(..) => col.name = value,
+                    _ => col.ty = value,
+                }
+                Action::UpdateColumn(t, c, col)
+            }
+        }
+    }
+    fn editor_rect(self, rects: &[Rect], z: f32) -> Rect {
+        let (t, top, height) = match self {
+            Self::Table(t) => (t, 0., HEADER),
+            Self::Name(t, c) | Self::Type(t, c) => (t, HEADER + ROW * c as f32, ROW),
+        };
+        let card = rects[t];
+        let left = if matches!(self, Self::Type(..)) {
+            card.center().x
+        } else {
+            card.left() + 4. * z
+        };
+        Rect::from_min_max(
+            pos2(left, card.top() + top * z),
+            pos2(card.right() - 3. * z, card.top() + (top + height) * z),
+        )
+    }
+}
+
 pub struct Canvas {
     pub positions: BTreeMap<String, [f32; 2]>,
     zoom: f32,
     pan: Vec2,
     moving: Option<String>,
+    inline: Option<(Field, String)>,
 }
 
 impl Default for Canvas {
@@ -35,6 +85,7 @@ impl Default for Canvas {
             zoom: 1.0,
             pan: vec2(24.0, 24.0),
             moving: None,
+            inline: None,
         }
     }
 }
@@ -72,6 +123,14 @@ fn line_distance(point: Pos2, path: &[Pos2; 4]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
+pub(crate) fn table_symbol(p: &Painter, r: Rect, color: Color32) {
+    let stroke = Stroke::new((r.width() / 10.).max(0.7), color);
+    p.rect_stroke(r, 2., stroke, StrokeKind::Inside);
+    let y = r.top() + r.height() * 0.35;
+    p.hline(r.x_range(), y, stroke);
+    p.vline(r.left() + r.width() * 0.38, y..=r.bottom(), stroke);
+}
+
 fn card(
     ui: &mut egui::Ui,
     p: &Painter,
@@ -80,33 +139,51 @@ fn card(
     index: usize,
     selection: Option<Pick>,
     z: f32,
-) {
+) -> Option<Field> {
+    let pointer = ui.input(|i| i.pointer.hover_pos());
     let t = &schema.tables[index];
     let keys = &schema.column_keys()[index];
     let selected = matches!(selection, Some(Pick::Table(i) | Pick::Column(i, _)) if i == index);
     p.rect_filled(
-        rect.translate(vec2(0.0, 2.0) * z),
-        5.0 * z,
-        Color32::from_black_alpha(15),
+        rect.translate(vec2(0., 2.) * z).expand(1. * z),
+        11. * z,
+        Color32::from_black_alpha(10),
     );
-    p.rect_filled(rect, 5.0 * z, Color32::WHITE);
+    p.rect_filled(rect, 10. * z, Color32::WHITE);
     let h = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * z));
+    let tile = Rect::from_center_size(h.left_center() + vec2(18., 0.) * z, vec2(21., 21.) * z);
     p.rect_filled(
-        h,
-        4.0 * z,
+        tile,
+        6. * z,
         if selected {
             ACCENT
         } else {
-            Color32::from_rgb(40, 63, 79)
+            Color32::from_rgb(230, 239, 253)
         },
     );
-    let title = h.shrink2(vec2(11.0, 1.0) * z);
+    table_symbol(
+        p,
+        tile.shrink(4.5 * z),
+        if selected { Color32::WHITE } else { ACCENT },
+    );
+    p.hline(
+        (h.left() + 8. * z)..=(h.right() - 8. * z),
+        h.bottom(),
+        Stroke::new(z, Color32::from_gray(230)),
+    );
+    let title = Rect::from_min_max(
+        pos2(tile.right() + 7. * z, h.top()),
+        h.max - vec2(7. * z, 0.),
+    );
+    let mut field = pointer
+        .filter(|p| title.contains(*p))
+        .map(|_| Field::Table(index));
     p.with_clip_rect(title).text(
         title.left_center(),
         Align2::LEFT_CENTER,
         &t.name,
-        FontId::proportional(15.0 * z),
-        Color32::WHITE,
+        FontId::proportional(15. * z),
+        INK,
     );
     let slots = keys
         .iter()
@@ -122,7 +199,11 @@ fn card(
             continue;
         }
         if Some(Pick::Column(index, i)) == selection {
-            p.rect_filled(row, 0.0, Color32::from_rgb(218, 240, 236));
+            p.rect_filled(
+                row.shrink2(vec2(3., 1.) * z),
+                5. * z,
+                Color32::from_rgb(225, 238, 255),
+            );
         }
         let mut badge_x = row.left() + 6.0 * z;
         for (visible, badge, role, background, foreground) in [
@@ -148,7 +229,7 @@ fn card(
                 pos2(badge_x + 10.5 * z, row.center().y),
                 vec2(21.0, 16.0) * z,
             );
-            p.rect_filled(chip, 3.0 * z, background);
+            p.rect_filled(chip, 7.0 * z, background);
             p.text(
                 chip.center(),
                 Align2::CENTER_CENTER,
@@ -172,46 +253,66 @@ fn card(
             badge_x += 24.0 * z;
         }
         let name = row.left_center() + vec2(7.0 + slots as f32 * 24.0, 0.0) * z;
-        let split = row.left() + row.width() * 0.70;
-        p.with_clip_rect(Rect::from_min_max(
-            row.min,
-            pos2(split - 4.0 * z, row.bottom()),
-        ))
-        .text(
-            name,
-            Align2::LEFT_CENTER,
-            &c.name,
-            FontId::proportional(13.0 * z),
-            INK,
-        );
-        p.with_clip_rect(Rect::from_min_max(
-            pos2(split, row.top()),
-            row.max - vec2(7.0 * z, 0.0),
-        ))
-        .text(
-            row.right_center() - vec2(8.0 * z, 0.0),
-            Align2::RIGHT_CENTER,
-            &c.ty,
-            FontId::monospace(11.0 * z),
+        let right = row.right() - 8. * z;
+        let available = right - name.x;
+        let mut type_job = egui::text::LayoutJob::simple_singleline(
+            c.ty.clone(),
+            FontId::monospace(11. * z),
             MUTED,
         );
+        type_job.wrap.max_width = available * 0.50;
+        type_job.wrap.max_rows = 1;
+        let ty = p.layout_job(type_job);
+        let type_pos = pos2(right - ty.size().x, row.center().y - ty.size().y * 0.5);
+        if let Some(pos) = pointer.filter(|pt| row.contains(*pt) && pt.x >= name.x - 2. * z) {
+            field = Some(if pos.x >= type_pos.x - 3. * z {
+                Field::Type(index, i)
+            } else {
+                Field::Name(index, i)
+            });
+        }
+        let mut name_job = egui::text::LayoutJob::simple_singleline(
+            c.name.clone(),
+            FontId::proportional(13. * z),
+            INK,
+        );
+        name_job.wrap.max_width = (type_pos.x - name.x - 5. * z).max(1.);
+        name_job.wrap.max_rows = 1;
+        let label = p.layout_job(name_job);
+        if ty.elided || label.elided {
+            ui.interact(
+                Rect::from_min_max(pos2(name.x, row.top()), row.max).intersect(p.clip_rect()),
+                ui.id().with(("column-detail", index, i)),
+                Sense::hover(),
+            )
+            .on_hover_text(format!("{}   {}", c.name, c.ty));
+        }
+        p.galley(pos2(name.x, name.y - label.size().y * 0.5), label, INK);
+        p.galley(type_pos, ty, MUTED);
     }
     p.rect_stroke(
         rect,
-        5.0 * z,
+        10.0 * z,
         Stroke::new(
             if selected { 2.0_f32 } else { 1.0_f32 },
             if selected {
                 ACCENT
             } else {
-                Color32::from_rgb(178, 191, 200)
+                Color32::from_rgb(205, 208, 217)
             },
         ),
         StrokeKind::Inside,
     );
+    field
 }
 
 impl Canvas {
+    pub fn is_editing(&self) -> bool {
+        self.inline.is_some()
+    }
+    pub fn cancel_edit(&mut self) {
+        self.inline = None;
+    }
     fn place_new(&mut self, schema: &Schema, width: f32) {
         let mut occupied: Vec<Rect> = schema
             .tables
@@ -262,27 +363,39 @@ impl Canvas {
         ui: &mut egui::Ui,
         schema: &Schema,
         selection: Option<Pick>,
-    ) -> Option<Pick> {
+    ) -> Option<Event> {
         let mut result = None;
         let mut fit = false;
         let mut factor = 1.0;
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("＋ テーブルを追加").clicked() {
-                result = Some(Pick::AddTable);
-            }
-            ui.separator();
-            if ui.button("−").on_hover_text("縮小").clicked() {
-                factor = 1.0 / 1.2;
-            }
-            ui.monospace(format!("{:.0}%", self.zoom * 100.0));
-            if ui.button("＋").on_hover_text("拡大").clicked() {
-                factor = 1.2;
-            }
-            if ui.button("全体を表示").clicked() {
-                fit = true;
-            }
-        });
-        ui.add_space(4.0);
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(12, 5))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("＋ テーブルを追加").color(Color32::WHITE),
+                            )
+                            .fill(ACCENT)
+                            .stroke(Stroke::NONE),
+                        )
+                        .clicked()
+                    {
+                        result = Some(Pick::AddTable);
+                    }
+                    ui.separator();
+                    if ui.button("−").on_hover_text("縮小").clicked() {
+                        factor = 1.0 / 1.2;
+                    }
+                    ui.monospace(format!("{:.0}%", self.zoom * 100.0));
+                    if ui.button("＋").on_hover_text("拡大").clicked() {
+                        factor = 1.2;
+                    }
+                    if ui.button("全体を表示").clicked() {
+                        fit = true;
+                    }
+                })
+            });
         let (area, response) = ui.allocate_exact_size(
             ui.available_size().max(vec2(1.0, 1.0)),
             Sense::click_and_drag(),
@@ -362,17 +475,15 @@ impl Canvas {
 
         let z = self.zoom;
         let painter = ui.painter_at(area);
-        painter.rect_filled(area, 4.0, Color32::from_rgb(243, 247, 249));
-        let grid = (24.0 * z).max(10.0);
-        let grid_stroke = Stroke::new(0.6_f32, Color32::from_rgb(219, 228, 233));
-        let mut x = area.left() + self.pan.x.rem_euclid(grid);
-        while x < area.right() {
-            painter.vline(x, area.y_range(), grid_stroke);
-            x += grid;
-        }
+        painter.rect_filled(area, 0., Color32::from_rgb(250, 250, 252));
+        let grid = (24. * z).max(14.);
         let mut y = area.top() + self.pan.y.rem_euclid(grid);
         while y < area.bottom() {
-            painter.hline(area.x_range(), y, grid_stroke);
+            let mut x = area.left() + self.pan.x.rem_euclid(grid);
+            while x < area.right() {
+                painter.circle_filled(pos2(x, y), 0.85, Color32::from_rgb(208, 211, 220));
+                x += grid;
+            }
             y += grid;
         }
         let endpoint = |(name, col): &(String, String)| {
@@ -397,7 +508,7 @@ impl Canvas {
             let color = if active {
                 ACCENT
             } else {
-                Color32::from_rgb(92, 119, 135)
+                Color32::from_rgb(110, 125, 149)
             };
             for pair in path.windows(2) {
                 painter.line_segment(
@@ -427,9 +538,13 @@ impl Canvas {
                 }
             }
         }
+        let mut field = None;
         for (i, rect) in rects.iter().enumerate() {
             if rect.intersects(area) {
-                card(ui, &painter, *rect, schema, i, selection, z);
+                let hovered = card(ui, &painter, *rect, schema, i, selection, z);
+                if pointer.is_some_and(|pt| rect.contains(pt)) {
+                    field = hovered;
+                }
             }
         }
         let hit = pointer
@@ -440,6 +555,7 @@ impl Canvas {
         }
         if pointer.is_some() {
             ui.ctx().set_cursor_icon(match hit {
+                _ if field.is_some() && !response.dragged() => CursorIcon::Text,
                 Some(Pick::Table(_)) => CursorIcon::Grab,
                 Some(_) => CursorIcon::PointingHand,
                 None if response.dragged() => CursorIcon::Grabbing,
@@ -452,7 +568,51 @@ impl Canvas {
                 ui.close_menu();
             }
         });
-        result
+        let start = field.filter(|_| response.double_clicked());
+        if let Some(target) = start {
+            self.inline = Some((target, target.text(schema).to_owned()));
+        }
+        if let Some((target, value)) = &mut self.inline {
+            let rect = target.editor_rect(&rects, z).intersect(area);
+            if !rect.is_positive() || !ui.is_enabled() {
+                self.inline = None;
+            } else {
+                let id = ui.make_persistent_id("diagram-input");
+                let activate = start.is_some();
+
+                let enter =
+                    ui.memory(|m| m.has_focus(id)) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let cancel = ui.input(|i| {
+                    i.key_pressed(egui::Key::Escape)
+                        || (i.pointer.any_pressed()
+                            && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p)))
+                });
+                let input = ui.put(
+                    rect,
+                    egui::TextEdit::singleline(value)
+                        .id(id)
+                        .font(FontId::proportional((13. * z).clamp(12., 22.))),
+                );
+                if activate {
+                    input.request_focus();
+                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                    state.clear_undoer();
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(value.chars().count()),
+                        )));
+                    state.store(ui.ctx(), id);
+                } else if cancel {
+                    self.inline = None;
+                } else if enter && input.lost_focus() {
+                    input.request_focus();
+                    return Some(Event::Apply(target.update(schema, value.clone())));
+                }
+            }
+        }
+        result.map(Event::Select)
     }
 }
 
@@ -498,6 +658,69 @@ mod tests {
         assert!(badge("PK").right() < badge("FK").left());
         assert!(badge("FK").right() < owner.left());
         assert_eq!(canvas.positions["child"], [310.0, 70.0]);
+    }
+
+    #[test]
+    fn double_click_type_then_replace_and_commit() {
+        let schema = Schema::parse("Table item { code varchar(30) [unique] }").unwrap();
+        let mut canvas = Canvas::default();
+        let ctx = egui::Context::default();
+        let mut time = 0.;
+        let mut frame = |events| {
+            time += 0.04;
+            let mut edit = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900., 600.))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        edit = canvas.show(ui, &schema, None);
+                    });
+                },
+            );
+            (output, edit)
+        };
+        let (out, _) = frame(vec![]);
+        let pos = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "varchar(30)" => {
+                    Some(t.pos + t.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap();
+        for pressed in [true, false, true, false] {
+            frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+        }
+        frame(vec![]);
+        frame(vec![egui::Event::Text("text".into())]);
+        let (_, event) = frame(vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let Some(Event::Apply(Action::UpdateColumn(0, 0, col))) = event else {
+            panic!("inline field did not commit")
+        };
+        assert_eq!(col.ty, "text");
+        assert_eq!(col.name, "code");
+        assert!(col.unique);
     }
 
     #[test]
