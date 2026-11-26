@@ -31,10 +31,8 @@ fn main() -> eframe::Result {
             ctx.set_theme(egui::Theme::Light);
             ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
             let mut fonts = egui::FontDefinitions::default();
-            if let Some(bytes) = japanese_font() {
-                fonts
-                    .font_data
-                    .insert("Japanese".into(), egui::FontData::from_owned(bytes).into());
+            if let Some(font) = japanese_font() {
+                fonts.font_data.insert("Japanese".into(), font.into());
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
                     fonts
                         .families
@@ -317,24 +315,32 @@ impl Tab {
     }
 }
 #[cfg(target_os = "windows")]
-fn japanese_font() -> Option<Vec<u8>> {
+fn japanese_font() -> Option<egui::FontData> {
     let dir = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:/Windows".into()))
         .join("Fonts");
     ["meiryo.ttc", "YuGothR.ttc", "msgothic.ttc"]
         .iter()
         .find_map(|name| std::fs::read(dir.join(name)).ok())
+        .map(egui::FontData::from_owned)
 }
 
 #[cfg(target_os = "macos")]
-fn japanese_font() -> Option<Vec<u8>> {
+fn japanese_font() -> Option<egui::FontData> {
     let dir = Path::new("/System/Library/Fonts");
     ["ヒラギノ角ゴシック W3.ttc", "ヒラギノ明朝 ProN.ttc"]
         .iter()
         .find_map(|name| std::fs::read(dir.join(name)).ok())
+        .map(|bytes| {
+            let mut font = egui::FontData::from_owned(bytes);
+            // Hiragino's glyphs sit high in egui's fallback rows. Move the
+            // glyphs without changing row height or widget padding.
+            font.tweak.y_offset_factor = 0.23;
+            font
+        })
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-fn japanese_font() -> Option<Vec<u8>> {
+fn japanese_font() -> Option<egui::FontData> {
     None
 }
 
