@@ -3,18 +3,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 export MACOSX_DEPLOYMENT_TARGET=11.0
-arm=aarch64-apple-darwin
-intel=x86_64-apple-darwin
-cargo build --release --locked --target "$arm" --target "$intel"
+target=aarch64-apple-darwin
+cargo build --release --locked --target "$target"
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 app="$stage/DBML Studio.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" dist
-for target in "$arm" "$intel"; do
-    cargo metadata --format-version 1 --locked --filter-platform "$target" > "$stage/$target.json"
-done
-version=$(python3 - "$stage" "$app" "$arm" "$intel" <<'PY'
+cargo metadata --format-version 1 --locked --filter-platform "$target" > "$stage/metadata.json"
+version=$(python3 - "$stage" "$app" <<'PY'
 import json
 import plistlib
 import re
@@ -22,11 +19,11 @@ import sys
 from pathlib import Path
 
 stage, app = map(Path, sys.argv[1:3])
-metadata = [json.loads((stage / f"{target}.json").read_text()) for target in sys.argv[3:]]
-root = metadata[0]["resolve"]["root"]
-packages = {p["id"]: p for data in metadata for p in data["packages"]}
+metadata = json.loads((stage / "metadata.json").read_text())
+root = metadata["resolve"]["root"]
+packages = {p["id"]: p for p in metadata["packages"]}
 version = packages.pop(root)["version"]
-(stage / "target-directory").write_text(metadata[0]["target_directory"])
+(stage / "target-directory").write_text(metadata["target_directory"])
 with (app / "Contents/Info.plist").open("wb") as plist:
     plistlib.dump({
         "CFBundleDisplayName": "DBML Studio",
@@ -54,9 +51,7 @@ print(version)
 PY
 )
 target_dir=$(cat "$stage/target-directory")
-lipo -create "$target_dir/$arm/release/dbml-studio" \
-    "$target_dir/$intel/release/dbml-studio" -output "$app/Contents/MacOS/dbml-studio"
-chmod 755 "$app/Contents/MacOS/dbml-studio"
+install -m 755 "$target_dir/$target/release/dbml-studio" "$app/Contents/MacOS/dbml-studio"
 codesign --force --sign - "$app"
 codesign --verify --strict --all-architectures "$app"
 
@@ -64,6 +59,6 @@ image="$stage/image"
 mkdir "$image"
 mv "$app" "$image/"
 ln -s /Applications "$image/Applications"
-file="dist/DBML-Studio-$version-macos-universal.dmg"
+file="dist/DBML-Studio-$version-macos-arm64.dmg"
 hdiutil create -ov -format UDZO -volname "DBML Studio" -srcfolder "$image" "$file"
 printf '%s\n' "$file"

@@ -7,7 +7,7 @@ DBML ファイルをタブで開き、ER 図とテキストのどちらからも
 [最新リリース](https://github.com/RoboticsY/dbml-studio/releases/latest) から、お使いの OS に合ったインストーラーをダウンロードしてください。
 
 - Windows x64 はセットアップファイルを実行し、スタートメニューから DBML Studio を起動します。
-- macOS は DMG を開き、DBML Studio.app を Applications にドラッグします。Apple Silicon と Intel に対応しています。Apple の公証を受けていないため、初回起動時に macOS が起動を止めることがあります。[Apple の案内](https://support.apple.com/ja-jp/102445)
+- macOS は DMG を開き、DBML Studio.app を Applications にドラッグします。Apple Silicon 搭載 Mac 向けです。Apple の公証を受けていないため、初回起動時に macOS が起動を止めることがあります。[Apple の案内](https://support.apple.com/ja-jp/102445)
 
 ## 編集と自動保存
 
@@ -36,9 +36,9 @@ Windows インストーラーの作成には NSIS 3 と PowerShell を使いま�
 セットアップファイルは `dist` に出力されます。
 
 
-macOS のユニバーサル DMG の作成には Python 3 と両方の Rust ターゲットを使用します。
+Apple Silicon 向けの DMG の作成には Python 3 と Rust の arm64 ターゲットを使用します。
 
-    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    rustup target add aarch64-apple-darwin
     ./installer/build-macos.sh
 
 DMG は `dist` に出力されます。
