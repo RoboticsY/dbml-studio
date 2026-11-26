@@ -6,7 +6,38 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub type Positions = BTreeMap<String, [f32; 2]>;
+pub const DEFAULT_WIDTH: f32 = 208.;
+#[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize)]
+pub struct NodeLayout {
+    pub x: f32,
+    pub y: f32,
+    #[serde(default = "default_width")]
+    pub width: f32,
+}
+fn default_width() -> f32 {
+    DEFAULT_WIDTH
+}
+
+impl From<[f32; 2]> for NodeLayout {
+    fn from([x, y]: [f32; 2]) -> Self {
+        Self {
+            x,
+            y,
+            width: DEFAULT_WIDTH,
+        }
+    }
+}
+impl serde::Serialize for NodeLayout {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // Keep legacy [x,y] entries until the user sets a custom width.
+        if self.width == DEFAULT_WIDTH {
+            [self.x, self.y].serialize(s)
+        } else {
+            [self.x, self.y, self.width].serialize(s)
+        }
+    }
+}
+pub type Positions = BTreeMap<String, NodeLayout>;
 
 #[derive(Clone)]
 pub struct Snapshot {
@@ -201,6 +232,33 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn resized_legacy_layout_survives_save_rename_and_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shop.dbml");
+        let source = "Table orders { id int }";
+        fs::write(&path, source).unwrap();
+        fs::write(sidecar(&path), r#"{"orders":[32,64]}"#).unwrap();
+        let (mut doc, mut layout, warning) = Document::open(&path).unwrap();
+        assert!(warning.is_none());
+        assert_eq!(layout["orders"].width, DEFAULT_WIDTH);
+        layout.get_mut("orders").unwrap().width = 516.;
+        doc.save_layout(&path, &layout, false).unwrap();
+        assert_eq!(Document::open(&path).unwrap().1, layout);
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        doc.apply(&Action::RenameTable(0, "purchases".into()), &mut layout)
+            .unwrap();
+        assert_eq!(
+            layout["purchases"],
+            NodeLayout {
+                x: 32.,
+                y: 64.,
+                width: 516.
+            }
+        );
+        doc.history(&mut layout, false);
+        assert_eq!(layout["orders"].width, 516.);
+    }
+    #[test]
     fn source_diagram_history_and_disk_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("shop.dbml");
@@ -220,12 +278,12 @@ mod tests {
             )
             .unwrap()
         );
-        positions.insert("members".into(), [100., 80.]);
+        positions.insert("members".into(), [100., 80.].into());
         doc.save(&path, &positions).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), expected);
         let (mut doc, mut positions, _) = Document::open(&path).unwrap();
         assert_eq!(doc.schema.refs[0], relation);
-        assert_eq!(positions["members"], [100., 80.]);
+        assert_eq!(positions["members"], [100., 80.].into());
         doc.apply(&Action::DeleteColumn(2, 0), &mut positions)
             .unwrap();
         assert!(doc.schema.refs.is_empty());
@@ -245,7 +303,7 @@ mod tests {
         let first = dir.path().join("a.dbml");
         let second = dir.path().join("b.dbml");
         let mut doc = Document::new();
-        let layout = Positions::from([("orders".into(), [11., 99.])]);
+        let layout = Positions::from([("orders".into(), [11., 99.].into())]);
         doc.save(&first, &layout).unwrap();
         fs::create_dir(sidecar(&second)).unwrap();
         assert!(doc.save(&second, &layout).is_err());

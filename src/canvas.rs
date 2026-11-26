@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use crate::document::{NodeLayout, Positions, DEFAULT_WIDTH};
 
 use crate::{
     inspector::Event,
@@ -9,7 +9,6 @@ use eframe::egui::{
     StrokeKind, Vec2,
 };
 
-const WIDTH: f32 = 208.0;
 const HEADER: f32 = 35.0;
 const ROW: f32 = 26.0;
 pub(crate) const ACCENT: Color32 = Color32::from_rgb(0, 96, 211);
@@ -70,28 +69,45 @@ impl Field {
     }
 }
 
+enum Drag {
+    Move(String),
+    Resize(String),
+}
+
 pub struct Canvas {
-    pub positions: BTreeMap<String, [f32; 2]>,
+    pub positions: Positions,
     zoom: f32,
     pan: Vec2,
-    moving: Option<String>,
+    drag: Option<Drag>,
     inline: Option<(Field, String)>,
 }
 
 impl Default for Canvas {
     fn default() -> Self {
         Self {
-            positions: BTreeMap::new(),
+            positions: Positions::new(),
             zoom: 1.0,
             pan: vec2(24.0, 24.0),
-            moving: None,
+            drag: None,
             inline: None,
         }
     }
 }
 
-fn table_size(table: &Table) -> Vec2 {
-    vec2(WIDTH, HEADER + ROW * table.columns.len() as f32 + 5.0)
+fn table_size(table: &Table, width: f32) -> Vec2 {
+    vec2(
+        width.max(DEFAULT_WIDTH),
+        HEADER + ROW * table.columns.len() as f32 + 5.0,
+    )
+}
+
+fn resize_hit(point: Pos2, rects: &[Rect]) -> Option<usize> {
+    let (i, r) = rects
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, r)| r.expand2(vec2(4., 0.)).contains(point))?;
+    ((r.right() - point.x).abs() <= 4.).then_some(i)
 }
 
 fn table_hit(point: Pos2, rects: &[Rect], zoom: f32, schema: &Schema) -> Option<Pick> {
@@ -320,10 +336,12 @@ impl Canvas {
             .filter_map(|t| {
                 self.positions
                     .get(&t.name)
-                    .map(|p| Rect::from_min_size(Pos2::from(*p), table_size(t)))
+                    .map(|p| Rect::from_min_size(pos2(p.x, p.y), table_size(t, p.width)))
             })
             .collect();
-        let cols = ((width + 30.0) / (WIDTH + 65.0)).floor().clamp(1.0, 5.0) as usize;
+        let cols = ((width + 30.0) / (DEFAULT_WIDTH + 65.0))
+            .floor()
+            .clamp(1.0, 5.0) as usize;
         for t in &schema.tables {
             if self.positions.contains_key(&t.name) {
                 continue;
@@ -332,8 +350,10 @@ impl Canvas {
             let rect = 'rows: loop {
                 let mut next_y = f32::INFINITY;
                 for i in 0..cols {
-                    let rect =
-                        Rect::from_min_size(pos2(i as f32 * (WIDTH + 65.0), y), table_size(t));
+                    let rect = Rect::from_min_size(
+                        pos2(i as f32 * (DEFAULT_WIDTH + 65.0), y),
+                        table_size(t, DEFAULT_WIDTH),
+                    );
                     let mut free = true;
                     for other in &occupied {
                         if rect.intersects(other.expand(22.0)) {
@@ -347,7 +367,8 @@ impl Canvas {
                 }
                 y = next_y;
             };
-            self.positions.insert(t.name.clone(), rect.min.into());
+            self.positions
+                .insert(t.name.clone(), NodeLayout::from([rect.min.x, rect.min.y]));
             occupied.push(rect);
         }
     }
@@ -404,7 +425,10 @@ impl Canvas {
         let worlds: Vec<_> = schema
             .tables
             .iter()
-            .map(|t| Rect::from_min_size(Pos2::from(self.positions[&t.name]), table_size(t)))
+            .map(|t| {
+                let p = self.positions[&t.name];
+                Rect::from_min_size(pos2(p.x, p.y), table_size(t, p.width))
+            })
             .collect();
         if fit {
             if let Some(bounds) = worlds.iter().copied().reduce(Rect::union) {
@@ -443,34 +467,54 @@ impl Canvas {
             .map(|r| to_screen(*r, self.pan, self.zoom))
             .collect();
         if response.drag_started() {
-            self.moving = ui.input(|i| i.pointer.press_origin()).and_then(|pos| {
-                if let Some(Pick::Table(index)) = table_hit(pos, &rects, self.zoom, schema) {
-                    if response.drag_started_by(egui::PointerButton::Primary) {
-                        result = Some(Pick::Table(index));
-                        return Some(schema.tables[index].name.clone());
-                    }
+            self.drag = ui.input(|i| i.pointer.press_origin()).and_then(|pos| {
+                if !response.drag_started_by(egui::PointerButton::Primary) {
+                    return None;
                 }
-                None
+                if let Some(i) = resize_hit(pos, &rects) {
+                    self.inline = None;
+                    Some(Drag::Resize(schema.tables[i].name.clone()))
+                } else if let Some(Pick::Table(i)) = table_hit(pos, &rects, self.zoom, schema) {
+                    result = Some(Pick::Table(i));
+                    Some(Drag::Move(schema.tables[i].name.clone()))
+                } else {
+                    None
+                }
             });
         }
         if response.dragged() {
             let delta = response.drag_delta();
-            if let Some(name) = &self.moving {
-                if let Some(index) = schema.tables.iter().position(|t| &t.name == name) {
-                    let p = self.positions.get_mut(name).unwrap();
-                    p[0] += delta.x / self.zoom;
-                    p[1] += delta.y / self.zoom;
-                    rects[index] = rects[index].translate(delta);
+            match &self.drag {
+                Some(gesture) => {
+                    let (Drag::Move(name) | Drag::Resize(name)) = gesture;
+                    if let Some(i) = schema.tables.iter().position(|t| &t.name == name) {
+                        let layout = self.positions.get_mut(name).unwrap();
+                        match gesture {
+                            Drag::Move(_) => {
+                                layout.x += delta.x / self.zoom;
+                                layout.y += delta.y / self.zoom;
+                                rects[i] = rects[i].translate(delta);
+                            }
+                            Drag::Resize(_) => {
+                                if let Some(pos) = response.interact_pointer_pos() {
+                                    layout.width =
+                                        ((pos.x - rects[i].left()) / self.zoom).max(DEFAULT_WIDTH);
+                                    rects[i].set_width(layout.width * self.zoom);
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                self.pan += delta;
-                for rect in &mut rects {
-                    *rect = rect.translate(delta);
+                None => {
+                    self.pan += delta;
+                    for r in &mut rects {
+                        *r = r.translate(delta);
+                    }
                 }
             }
         }
         if response.drag_stopped() {
-            self.moving = None;
+            self.drag = None;
         }
 
         let z = self.zoom;
@@ -547,13 +591,28 @@ impl Canvas {
                 }
             }
         }
+        let edge = pointer.and_then(|pt| resize_hit(pt, &rects));
+        if let Some(i) = edge {
+            let r = rects[i];
+            let center = r.center();
+            let half = (r.height() / 2.).min(10.);
+            painter.line_segment(
+                [
+                    pos2(r.right(), center.y - half),
+                    pos2(r.right(), center.y + half),
+                ],
+                Stroke::new(3.0_f32, ACCENT),
+            );
+        }
         let hit = pointer
             .and_then(|p| table_hit(p, &rects, z, schema))
             .or(line_hit);
         if response.clicked() {
             result = hit;
         }
-        if pointer.is_some() {
+        if matches!(self.drag, Some(Drag::Resize(_))) || edge.is_some() {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        } else if pointer.is_some() {
             ui.ctx().set_cursor_icon(match hit {
                 _ if field.is_some() && !response.dragged() => CursorIcon::Text,
                 Some(Pick::Table(_)) => CursorIcon::Grab,
@@ -568,7 +627,7 @@ impl Canvas {
                 ui.close_menu();
             }
         });
-        let start = field.filter(|_| response.double_clicked());
+        let start = field.filter(|_| edge.is_none() && response.double_clicked());
         if let Some(target) = start {
             self.inline = Some((target, target.text(schema).to_owned()));
         }
@@ -627,7 +686,9 @@ mod tests {
         )
         .unwrap();
         let mut canvas = Canvas::default();
-        canvas.positions.insert("child".into(), [310.0, 70.0]);
+        canvas
+            .positions
+            .insert("child".into(), [310.0, 70.0].into());
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 600.0))),
             ..Default::default()
@@ -657,7 +718,7 @@ mod tests {
         };
         assert!(badge("PK").right() < badge("FK").left());
         assert!(badge("FK").right() < owner.left());
-        assert_eq!(canvas.positions["child"], [310.0, 70.0]);
+        assert_eq!(canvas.positions["child"], [310.0, 70.0].into());
     }
 
     #[test]

@@ -889,10 +889,12 @@ mod tab_tests {
         let mut app = Studio::new();
         app.open(&path);
         let tab = &mut app.tabs[0];
-        tab.canvas.positions.insert("shop".into(), [80., 50.]);
+        tab.canvas
+            .positions
+            .insert("shop".into(), [80., 50.].into());
         tab.autosave().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-        assert_eq!(Document::open(&path).unwrap().1["shop"], [80., 50.]);
+        assert_eq!(Document::open(&path).unwrap().1["shop"], [80., 50.].into());
         tab.doc.text = "Table shop{id int[null, not null]}".into();
         tab.doc.parse();
         assert!(tab.doc.error.is_some());

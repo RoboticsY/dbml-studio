@@ -768,12 +768,13 @@ dependencies = [
 
 [[package]]
 name = "dbml-studio"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "dbml-rs",
  "eframe",
  "rfd",
  "semver",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",
