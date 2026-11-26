@@ -1,0 +1,26 @@
+name: Windows installer
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NSIS
+        run: choco upgrade nsis --yes --no-progress
+      - name: Test and package
+        shell: pwsh
+        run: |
+          $env:Path = "${env:ProgramFiles(x86)}\NSIS;${env:ProgramFiles}\NSIS;$env:Path"
+          cargo test --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./installer/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*-windows-x64-setup.exe
+          if-no-files-found: error

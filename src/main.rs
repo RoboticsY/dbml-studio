@@ -28,13 +28,7 @@ fn main() -> eframe::Result {
             ctx.set_theme(egui::Theme::Light);
             ctx.set_visuals_of(egui::Theme::Light, egui::Visuals::light());
             let mut fonts = egui::FontDefinitions::default();
-            let dir =
-                PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:/Windows".into()))
-                    .join("Fonts");
-            if let Some(bytes) = ["meiryo.ttc", "YuGothR.ttc", "msgothic.ttc"]
-                .iter()
-                .find_map(|f| std::fs::read(dir.join(f)).ok())
-            {
+            if let Some(bytes) = japanese_font() {
                 fonts
                     .font_data
                     .insert("Japanese".into(), egui::FontData::from_owned(bytes).into());
@@ -319,8 +313,36 @@ impl Tab {
             });
     }
 }
+#[cfg(target_os = "windows")]
+fn japanese_font() -> Option<Vec<u8>> {
+    let dir = PathBuf::from(std::env::var_os("WINDIR").unwrap_or_else(|| "C:/Windows".into()))
+        .join("Fonts");
+    ["meiryo.ttc", "YuGothR.ttc", "msgothic.ttc"]
+        .iter()
+        .find_map(|name| std::fs::read(dir.join(name)).ok())
+}
+
+#[cfg(target_os = "macos")]
+fn japanese_font() -> Option<Vec<u8>> {
+    let dir = Path::new("/System/Library/Fonts");
+    ["ヒラギノ角ゴシック W3.ttc", "ヒラギノ明朝 ProN.ttc"]
+        .iter()
+        .find_map(|name| std::fs::read(dir.join(name)).ok())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn japanese_font() -> Option<Vec<u8>> {
+    None
+}
+
 fn drafts_directory() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("DBML Studio").join("Drafts"))
+    #[cfg(target_os = "macos")]
+    let data = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support"));
+    #[cfg(not(target_os = "macos"))]
+    let data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+
+    data.map(|dir| dir.join("DBML Studio").join("Drafts"))
 }
 fn ref_label(r: &Relation) -> String {
     format!(
