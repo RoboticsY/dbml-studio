@@ -9,6 +9,9 @@
 !ifndef NOTICES
   !error "Pass /DNOTICES=<third-party notices>"
 !endif
+!ifndef APP_ICON
+  !error "Pass /DAPP_ICON=<icon path>"
+!endif
 !ifndef VERSION
   !error "Pass /DVERSION=<version>"
 !endif
@@ -23,8 +26,8 @@ VIAddVersionKey "FileDescription" "DBML Studio Setup"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "RoboticsY"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboticsY.DBMLStudio"
-!define MUI_ICON "${__FILEDIR__}\..\assets\app-icon.ico"
-!define MUI_UNICON "${__FILEDIR__}\..\assets\app-icon.ico"
+!define MUI_ICON "${APP_ICON}"
+!define MUI_UNICON "${APP_ICON}"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_CONFIRM

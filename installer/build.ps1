@@ -26,7 +26,8 @@ try {
             $writer.WriteLine()
         }
     } finally { $writer.Dispose() }
-    makensis /V2 "/DVERSION=$version" "/DAPP_EXE=$binary" "/DNOTICES=$notices" "/DOUTPUT_FILE=$installer" installer/setup.nsi
+    $icon = (Get-Item assets/app-icon.ico).FullName
+    makensis /V2 "/DAPP_ICON=$icon" "/DVERSION=$version" "/DAPP_EXE=$binary" "/DNOTICES=$notices" "/DOUTPUT_FILE=$installer" installer/setup.nsi
     if ($LASTEXITCODE) { throw "NSIS build failed" }
     Write-Output $installer
 } finally { Pop-Location }
