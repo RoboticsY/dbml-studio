@@ -23,6 +23,8 @@ VIAddVersionKey "FileDescription" "DBML Studio Setup"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "LegalCopyright" "RoboticsY"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboticsY.DBMLStudio"
+!define MUI_ICON "${__FILEDIR__}\..\assets\app-icon.ico"
+!define MUI_UNICON "${__FILEDIR__}\..\assets\app-icon.ico"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_CONFIRM

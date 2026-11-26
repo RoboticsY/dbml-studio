@@ -29,6 +29,7 @@ with (app / "Contents/Info.plist").open("wb") as plist:
         "CFBundleDisplayName": "DBML Studio",
         "CFBundleName": "DBML Studio",
         "CFBundleExecutable": "dbml-studio",
+        "CFBundleIconFile": "AppIcon.icns",
         "CFBundleIdentifier": "com.roboticsy.dbml-studio",
         "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": version,
@@ -52,6 +53,16 @@ PY
 )
 target_dir=$(cat "$stage/target-directory")
 install -m 755 "$target_dir/$target/release/dbml-studio" "$app/Contents/MacOS/dbml-studio"
+iconset="$stage/AppIcon.iconset"
+mkdir "$iconset"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" assets/app-icon.png \
+        --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    retina=$((size * 2))
+    sips -z "$retina" "$retina" assets/app-icon.png \
+        --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 codesign --force --sign - "$app"
 codesign --verify --strict --all-architectures "$app"
 

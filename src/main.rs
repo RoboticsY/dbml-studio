@@ -13,9 +13,12 @@ use model::{Action, Relation};
 use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/app-icon.png"))
+        .expect("bundled application icon must be a valid PNG");
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
+            .with_icon(icon)
             .with_inner_size([1370., 830.])
             .with_min_inner_size([880., 520.]),
         ..Default::default()
