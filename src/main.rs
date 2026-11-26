@@ -3,6 +3,8 @@ mod canvas;
 mod document;
 mod format;
 mod inspector;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod instance;
 mod model;
 mod update;
 
@@ -14,6 +16,28 @@ use model::{Action, Relation};
 use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let _instance = match instance::acquire(app_data_directory().as_deref()) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            rfd::MessageDialog::new()
+                .set_title("DBML Studio")
+                .set_description(
+                    "DBML Studio はすでに起動しています。既存のウインドウをお使いください。",
+                )
+                .show();
+            return Ok(());
+        }
+        Err(error) => {
+            rfd::MessageDialog::new()
+                .set_title("DBML Studio")
+                .set_level(rfd::MessageLevel::Error)
+                .set_description(format!("起動に必要なロックを取得できませんでした。{error}"))
+                .show();
+            return Ok(());
+        }
+    };
+
     let icon = eframe::icon_data::from_png_bytes(include_bytes!("../assets/app-icon.png"))
         .expect("bundled application icon must be a valid PNG");
     let options = eframe::NativeOptions {
@@ -345,14 +369,18 @@ fn japanese_font() -> Option<egui::FontData> {
     None
 }
 
-fn drafts_directory() -> Option<PathBuf> {
+fn app_data_directory() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     let data = std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join("Library/Application Support"));
     #[cfg(not(target_os = "macos"))]
     let data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
 
-    data.map(|dir| dir.join("DBML Studio").join("Drafts"))
+    data.map(|dir| dir.join("DBML Studio"))
+}
+
+fn drafts_directory() -> Option<PathBuf> {
+    app_data_directory().map(|dir| dir.join("Drafts"))
 }
 fn ref_label(r: &Relation) -> String {
     format!(
